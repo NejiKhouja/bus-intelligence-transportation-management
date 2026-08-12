@@ -1,74 +1,50 @@
 # Architecture
 
-## Scope boundary
+Separate from BUS Software's existing AI layer (RAG chatbot, ETA/delay
+prediction, anomaly detection) — reads the same MongoDB, read-only, and
+the sibling `winicari` repo's reference DB, also read-only (see
+`reference_db_integration.md`). Never writes back to either.
 
-This project is separate from BUS Software's existing AI layer (RAG
-chatbot, ETA/delay prediction, trip anomaly detection, ticket-sales
-anomaly detection). It does not modify that layer. It reads from the
-same MongoDB server, read-only, and produces its own local artifacts
-(`data/`) and its own models/optimizers (`src/models/`,
-`src/optimization/`). If results ever need to be surfaced to another
-service, that happens through `src/api/app.py`, not by writing back into
-the operational collections.
-
-## Pipeline shape
+## Pipeline
 
 ```
-MongoDB (winicari, Historique_Tickets, Historique_pos, OpenData)
-      |  src/database/  (read-only client + generic explorer + domain queries)
+MongoDB + reference DB
       v
-src/data/extraction.py        raw documents -> normalized DataFrames
-      |
+src/data/extraction.py        raw -> normalized DataFrames
       v
-src/data/cleaning.py          date parsing, lat/lon order fix, name normalization
-src/data/validation.py        missing/invalid/duplicate metrics -> docs/database.md audit
-src/data/transformations.py   ticket-level -> demand-by-bucket; GPS pings -> travel-time segments
-      |
+cleaning.py / validation.py / transformations.py
       v
-src/features/                 calendar features, lag features, time-of-day features
-      |
+src/features/                 calendar, lag, time-of-day features
       v
-src/models/                   naive baseline -> LightGBM/XGBoost (demand, travel time)
-      |
+src/models/                   naive baseline -> LightGBM/XGBoost
       v
-src/optimization/             OR-Tools: schedule + vehicle allocation, constrained by predictions
-      |
+src/optimization/             OR-Tools: schedule + vehicle allocation
       v
 Recommended schedule / vehicle allocation
 ```
 
-ML predicts the operating environment (how many passengers, how long a
-leg takes). Optimization decides what to do about it under constraints
-(vehicle capacity, depot assignment). The two are not merged into a
-single model — see `docs/optimization_problem.md` for why.
+ML predicts the environment (demand, leg travel time); optimization
+decides under constraints (capacity, depot). Kept separate — see
+`optimization_problem.md`.
 
-## Why this layering
+## Why
 
-- **`src/database/` is generic** (`explorer.py`) plus **domain-specific**
-  (`queries.py`) on purpose: `explorer.py` has no knowledge of "routes"
-  or "tickets" and is reusable for any future collection; `queries.py`
-  is where this project's assumptions about which collections matter
-  live, so they're easy to find and revise.
-- **`extraction.py` is the only place that touches raw MongoDB document
-  shapes.** Everything downstream works on flat DataFrames with stable
-  column names, so a future schema change in `winicari.ticket` (which
-  has already diverged from `Historique_Tickets.Ticket<year>` once, see
-  `data_dictionary.md`) only requires editing one function.
-- **Validation is a library, not a one-off script**, so the same checks
-  used for the initial audit (`docs/database.md`) can be re-run on every
-  future extraction to catch regressions (e.g. a device firmware update
-  that starts sending swapped lat/lon again).
+- `src/database/explorer.py` is generic (any collection); `queries.py`
+  holds this project's assumptions about which collections matter.
+- `extraction.py` is the only place touching raw document shapes —
+  everything downstream is stable-column DataFrames, so a schema drift
+  (e.g. `winicari.ticket` vs `Historique_Tickets` field names, see
+  `data_dictionary.md`) is a one-function fix.
+- `validation.py` is a reusable library, not a one-off audit script, so
+  the same checks catch regressions on every future extraction.
 
-## What's implemented vs. scaffolded
+## Status
 
 | Layer | Status |
 |---|---|
-| `src/database/` | Implemented and tested against the live database |
-| `src/data/extraction.py`, `cleaning.py`, `validation.py`, `transformations.py` | Implemented and tested against the live database (routes, vehicles, companies, OpenData stops, one day of GPS, one year of tickets) |
-| `src/features/` | Scaffolded — calendar/lag/time-of-day helpers exist, but the weather-join and route-leg-matching work they depend on is not done (see `docs/roadmap.md`) |
-| `src/models/` | Scaffolded — baseline functions only (naive lag, historical mean), no learned model yet |
-| `src/optimization/` | Scaffolded — module boundaries and docstrings only, pending model outputs to optimize against |
-| `src/api/` | Placeholder — no consumer specified yet |
-
-This matches the brief: build the foundation and prove the data supports
-it, don't train models before the data is understood.
+| `src/database/` | Implemented, tested against live MongoDB + reference DB |
+| `src/data/*` | Implemented, tested (routes, vehicles, GPS, tickets, trips, trip_stops) |
+| `src/features/` | Scaffolded — blocked on weather-join coverage + route-leg matching |
+| `src/models/` | Scaffolded — baselines only, no learned model |
+| `src/optimization/` | Scaffolded — pending model outputs |
+| `src/api/` | Placeholder |

@@ -1,27 +1,52 @@
-"""Extraction: raw MongoDB documents -> normalized pandas DataFrames.
+"""Raw MongoDB documents -> normalized pandas DataFrames. Only for
+datasets confirmed usable during discovery (docs/database.md). No model
+training here.
 
-Only implemented for datasets confirmed to exist and be usable during
-database discovery (see docs/database.md). Nothing here trains a model —
-this is purely the MongoDB-independent representation that Phase 9
-modeling code will consume.
+`extract_reference_*` functions read the sibling winicari repo's SQLite
+reference DB instead of raw MongoDB — see docs/reference_db_integration.md.
 """
 
 from __future__ import annotations
 
+import json
+
 import pandas as pd
 
 from src.database import queries
-from src.data.cleaning import normalize_societe_name, parse_flexible_datetime, swap_lat_lon_if_needed
+from src.data.cleaning import MANUAL_COMPANY_ALIASES, normalize_societe_name, parse_flexible_datetime, swap_lat_lon_if_needed
+
+
+def _parse_json_list(value) -> list:
+    """Some reference-DB text columns store a JSON array, others a plain
+    string left over from before the column was made multi-valued."""
+    if value is None:
+        return []
+    try:
+        return json.loads(value)
+    except (json.JSONDecodeError, TypeError):
+        return [value]
+
+
+def build_company_alias_map() -> dict[str, str]:
+    """alias -> canonical name, from the reference DB's companies.aliases
+    plus MANUAL_COMPANY_ALIASES. Falls back to the manual list alone if
+    the reference DB isn't reachable."""
+    alias_map = dict(MANUAL_COMPANY_ALIASES)
+    try:
+        companies = queries.reference_companies()
+    except Exception:
+        return alias_map
+    for _, row in companies.iterrows():
+        canonical = row["canonical_name"]
+        for alias in _parse_json_list(row["aliases"]):
+            alias_map.setdefault(alias, canonical)
+    return alias_map
 
 
 def extract_routes() -> pd.DataFrame:
-    """winicari.ligne -> one row per route.
-
-    Columns:
-        route_id, societe, origin_fr, destination_fr, n_stops,
-        stop_ids (list[str]), stop_names_fr (list[str]),
-        has_opendata_geometry (bool)
-    """
+    """winicari.ligne -> route_id, societe, origin_fr, destination_fr,
+    n_stops, stop_ids[], stop_names_fr[], opendata_stop_codes[],
+    has_opendata_geometry."""
     rows = []
     for doc in queries.iter_routes():
         opendata_codes = doc.get("station_opendata")
@@ -40,11 +65,8 @@ def extract_routes() -> pd.DataFrame:
 
 
 def extract_vehicles() -> pd.DataFrame:
-    """winicari.bus -> one row per vehicle.
-
-    Columns: vehicle_id, matricule, societe, capacity, max_speed_kmh,
-    active, fonctionnel, date_added
-    """
+    """winicari.bus -> vehicle_id, matricule, societe, capacity,
+    max_speed_kmh, active, fonctionnel, date_added."""
     rows = []
     for doc in queries.iter_vehicles():
         rows.append({
@@ -61,7 +83,6 @@ def extract_vehicles() -> pd.DataFrame:
 
 
 def extract_companies() -> pd.DataFrame:
-    """winicari.societe -> one row per operator."""
     rows = []
     for doc in queries.iter_companies():
         rows.append({
@@ -74,10 +95,7 @@ def extract_companies() -> pd.DataFrame:
 
 
 def extract_opendata_stops(variant: str = "Station_new") -> pd.DataFrame:
-    """OpenData.<variant> -> one row per geocoded stop.
-
-    Columns: stop_code, name_fr, name_ar, lat, lon
-    """
+    """OpenData.<variant> -> stop_code, name_fr, name_ar, lat, lon."""
     rows = []
     for doc in queries.iter_opendata_stations(variant):
         rows.append({
@@ -109,15 +127,13 @@ def _flatten_gps_doc(doc: dict) -> dict:
 
 
 def extract_live_gps() -> pd.DataFrame:
-    """winicari.position -> normalized GPS ping table. Rolling ~1 week
-    window; use extract_archived_gps_day() for historical depth."""
+    """Rolling ~1wk window; use extract_archived_gps_day() for history."""
     return pd.DataFrame(_flatten_gps_doc(d) for d in queries.iter_live_gps())
 
 
 def extract_archived_gps_day(day: str) -> pd.DataFrame:
-    """Historique_pos.d<day> -> normalized GPS ping table for one calendar
-    day. day format: 'YYYYMMDD'. Call once per day and concatenate/persist
-    incrementally — do not loop over all 1,600+ days into one DataFrame."""
+    """day format 'YYYYMMDD'. Call per day and persist incrementally —
+    don't loop over all 1,600+ days into one DataFrame."""
     return pd.DataFrame(_flatten_gps_doc(d) for d in queries.iter_archived_gps_for_day(day))
 
 
@@ -152,13 +168,67 @@ def _flatten_ticket_doc(doc: dict, archived: bool) -> dict:
 
 
 def extract_live_tickets() -> pd.DataFrame:
-    """winicari.ticket -> normalized demand table. Rolling ~1 week window."""
     return pd.DataFrame(_flatten_ticket_doc(d, archived=False) for d in queries.iter_live_tickets())
 
 
 def extract_archived_tickets(year: int) -> pd.DataFrame:
-    """Historique_Tickets.Ticket<year> -> normalized demand table.
-    This is the primary demand-forecasting dataset (2019-2026 available).
-    Call once per year and persist incrementally (see data/README.md) —
-    a single year can already be 200k-1.3M rows."""
+    """Main demand dataset, 2019-2026. A single year can be 200k-1.3M rows."""
     return pd.DataFrame(_flatten_ticket_doc(d, archived=True) for d in queries.iter_archived_tickets(year))
+
+
+# --- reference DB (sibling winicari repo, docs/reference_db_integration.md) ---
+# Prefer these over the raw-Mongo functions above wherever both exist.
+
+def extract_reference_companies() -> pd.DataFrame:
+    df = queries.reference_companies()
+    df["aliases"] = df["aliases"].apply(_parse_json_list)
+    return df
+
+
+def extract_reference_stops() -> pd.DataFrame:
+    """Supersedes extract_opendata_stops() — see reference_db_integration.md."""
+    df = queries.reference_stops()
+    df["aliases"] = df["aliases"].apply(_parse_json_list)
+    df["source"] = df["source"].apply(_parse_json_list)
+    return df
+
+
+def extract_reference_lines() -> pd.DataFrame:
+    return queries.reference_lines()
+
+
+def extract_reference_line_stops() -> pd.DataFrame:
+    return queries.reference_line_stops()
+
+
+def extract_trips() -> pd.DataFrame:
+    """Main travel-time ground truth — see
+    transformations.travel_times_from_trip_stops()/derive_empirical_schedule()."""
+    df = queries.reference_trips()
+    for col in ("trip_start", "trip_end"):
+        df[col] = pd.to_datetime(df[col], format="mixed")
+    return df
+
+
+def extract_trip_stops() -> pd.DataFrame:
+    """563,087 rows — filter by trip_id rather than loading unfiltered
+    for large-scale work."""
+    df = queries.reference_trip_stops()
+    for col in ("arrival", "departure"):
+        df[col] = pd.to_datetime(df[col], format="mixed")
+    return df
+
+
+def extract_reference_tickets_daily() -> pd.DataFrame:
+    df = queries.reference_tickets_daily()
+    df["day"] = pd.to_datetime(df["day"], format="%Y%m%d")
+    return df
+
+
+def extract_driver_services() -> pd.DataFrame:
+    """Descriptive only — see docs/optimization_problem.md Problem 3."""
+    df = queries.reference_driver_services()
+    df["day"] = pd.to_datetime(df["day"], format="%Y%m%d")
+    for col in ("service_start", "service_end"):
+        df[col] = pd.to_datetime(df[col], format="mixed")
+    return df

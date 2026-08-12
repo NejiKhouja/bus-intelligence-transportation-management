@@ -1,8 +1,5 @@
-"""Standard forecasting metrics (MAE, RMSE, MAPE) plus a helper to compare
-a candidate model against the naive baseline in
-src/models/demand_forecasting.py — a model is only worth shipping if it
-beats that baseline by a meaningful margin.
-"""
+"""MAE, RMSE, MAPE — for comparing a model against the naive baseline in
+src/models/demand_forecasting.py."""
 
 from __future__ import annotations
 

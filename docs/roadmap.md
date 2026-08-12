@@ -1,75 +1,61 @@
 # Roadmap
 
-Reflects what database discovery actually found (`docs/database.md`),
-not the originally assumed scope. Ordered by dependency, not by
-calendar time.
+Ordered by dependency, not calendar time.
+
+## Resolved during discovery
+
+- Operator-name inconsistency — confirmed: `S.R.T.GAFSA`==`SRT.ELGOUAFEL`,
+  `winicari`/`Winicari` is a placeholder kept separate. Handled in
+  `cleaning.normalize_societe_name()` / `extraction.build_company_alias_map()`.
+- Canonical stop table — reference DB's clustered `stops` (3,248 rows)
+  supersedes the 4 overlapping `OpenData` variants. Use
+  `extraction.extract_reference_stops()`.
+- 2023 ticket dip — confirmed device outage, not real demand drop or
+  export gap. Treat 2023 as under-observed in demand models.
+- Missing-schedule blocker — partially resolved via
+  `transformations.derive_empirical_schedule()` on reconstructed trips.
 
 ## Immediate next steps
 
-1. **Resolve the operator-name inconsistency** (`winicari` vs
-   `Winicari`, `S.R.T.GAFSA` vs `SRT.ELGOUAFEL`) with the business before
-   it's baked into any per-operator aggregation — a wrong merge here
-   silently splits or double-counts one operator's demand.
-2. **Decide on a canonical stop table.** Four overlapping OpenData
-   station tables exist (`Station`, `Station2`, `Station_new`,
-   `Station_sts`). `extraction.py` currently defaults to `Station_new`;
-   confirm with whoever owns OpenData ingestion whether that's actually
-   the most complete/correct one, and get a plan for the ~52% of routes
-   still missing `station_opendata` linkage.
-3. **Extract and persist a full year of tickets + a representative month
-   of GPS** (not just the one day / one year sampled during discovery)
-   into `data/processed/`, running `src/data/validation.py` over the
-   full extract to get real (not sampled) missing/invalid rates.
-4. **Get an answer on the missing-schedule problem** (see
-   `docs/optimization_problem.md`, Problem 1) — this determines whether
-   schedule optimization is deliverable in this project's first phase or
-   needs a data-collection prerequisite first.
+1. Extract/persist a full year of tickets + a representative GPS month
+   into `data/processed/`, running `validation.py` for real (not
+   sampled) missing/invalid rates.
+2. Add a concrete filter for `trip_stops`/`trips` before modeling — leg
+   travel-time and `driver_services` shift-length outliers
+   (`reference_db_integration.md`) need a bound, not just a caveat.
+3. Replace `fonctionnel` as the "is this vehicle operational" signal
+   with recent trip/GPS activity — the flag is often stale (see
+   `optimization_problem.md` Problem 2).
+4. Decide how to treat the 46% of lines with no resolved stop geometry
+   — out of scope, or a geocoding effort to close it.
 
 ## Phase A — Demand forecasting (feasible now)
 
-- Persist demand aggregation (`transformations.aggregate_demand()`) for
-  all available years per route, at daily and hourly granularity.
-- Join `OpenData.historiqueJourMeteo` calendar flags once per-station
-  coverage is confirmed (see `data_dictionary.md` — coverage was
-  inconsistent across the two sampled stations).
-- Ship the naive last-week baseline
-  (`src/models/demand_forecasting.py:naive_last_week_baseline`) first,
-  measure it with `src/evaluation/forecasting_metrics.py`, and only then
-  justify a LightGBM/XGBoost model by how much it beats that baseline.
+- Persist `aggregate_demand()` for all years, daily + hourly.
+- Join `historiqueJourMeteo` once per-station coverage is confirmed.
+- Ship the naive last-week baseline first; only add LightGBM/XGBoost if
+  it measurably beats it.
 
-## Phase B — Travel-time prediction (feasible, more work than demand)
+## Phase B — Travel-time prediction (feasible)
 
-- Build route-leg matching: snap each GPS segment
-  (`transformations.build_gps_segments()`) to a specific stop-to-stop leg
-  of its route. Only usable for the ~48% of routes with
-  `station_opendata` geometry today — the rest need either manual
-  geometry entry or a different matching approach (e.g. matching against
-  `stations[]` order without coordinates).
-- Filter GPS outliers before modeling — the discovery run already found
-  an implausible ~530 km/h computed segment from a single bad fix; this
-  needs a systematic filter (e.g. max plausible speed, minimum ping
-  density), not just eyeballing.
-- Baseline: historical mean travel time per leg/hour/day-of-week
-  (`src/models/travel_time_prediction.py`) before any learned model.
+- Prefer `travel_times_from_trip_stops()` (reference DB) over
+  `build_gps_segments()` (raw GPS) — already matched/corrected.
+- Bound outliers before modeling (see step 2 above).
+- Baseline: historical mean per leg/hour/day-of-week before any learned model.
 
-## Phase C — Vehicle allocation (feasible once Phase A exists)
+## Phase C — Vehicle allocation (feasible)
 
-- Implement `src/optimization/vehicle_optimizer.py` against Phase A's
-  demand predictions and the current `fonctionnel` fleet (162 vehicles
-  in the discovery snapshot — confirm this is current, since 584/772 are
-  marked `active: false`, which is a very retired-looking fleet list to
-  plan against without checking with the business first).
+- Implement `vehicle_optimizer.py` against Phase A's demand and an
+  activity-derived operational fleet (not raw `fonctionnel`, see step 3).
 
-## Phase D — Schedule optimization (blocked)
+## Phase D — Schedule optimization (feasible, empirical baseline)
 
-- Cannot start until the missing-schedule question in
-  `docs/optimization_problem.md` is resolved with the business.
+- Use `derive_empirical_schedule()` as the baseline to optimize headway
+  against. A real published timetable from the business would validate
+  it further but isn't required to start.
 
-## Explicitly out of scope for this project (per the brief)
+## Out of scope
 
-- Driver scheduling/optimization — no data exists (Problem 3 in
-  `docs/optimization_problem.md`).
-- Anything already covered by the existing separate AI layer (RAG
-  chatbot, ETA/delay prediction, trip anomaly detection, ticket-sales
-  anomaly detection) — this project reads the same MongoDB server but
-  does not duplicate or modify that layer.
+- Driver scheduling — no availability data exists (Problem 3).
+- Anything already covered by the existing AI layer (RAG chatbot,
+  ETA/delay, anomaly detection) — read-only reuse, no duplication.

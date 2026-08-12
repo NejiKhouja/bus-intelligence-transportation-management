@@ -1,78 +1,54 @@
-# Optimization Problem — Initial Formulation
+# Optimization Problem
 
-This describes the intended problem shape, not a finished implementation
-— `src/optimization/` is currently scaffolding only (see
-`docs/architecture.md`). Written now so the objective/constraints
-modules have a target to fill in once demand and travel-time predictions
-exist.
+Intended shape, not built yet — `src/optimization/` is scaffolding.
 
-## Why optimization, not a bigger neural network
+## Why optimization, not a bigger model
 
-Scheduling and allocation are combinatorial decisions under hard
-constraints (a vehicle can't be in two places, capacity is a hard cap,
-a depot has a fixed number of vehicles). ML is good at predicting
-uncertain quantities (demand, travel time); it is a poor fit for
-enforcing hard constraints or guaranteeing feasibility. The standard
-and more explainable approach — and the one this project defaults to —
-is: predict the environment with ML, then solve the decision problem
-with constraint programming / MILP. Google OR-Tools is the intended
-solver (CP-SAT for scheduling, linear_solver for allocation), per the
-brief.
+Scheduling/allocation are combinatorial decisions under hard constraints
+(a vehicle can't be in two places, capacity is a hard cap). ML predicts
+the uncertain stuff (demand, travel time); OR-Tools (CP-SAT for
+scheduling, linear_solver for allocation) makes the constrained
+decision. Keeping these separate rather than folding into one model.
 
-## Problem 1: Schedule optimization (headway / departure times)
+## Problem 1: Schedule optimization (headway/departure times)
 
-**Given**, per route and time-of-day bucket:
-- Predicted passenger demand (`src/models/demand_forecasting.py`)
-- Predicted travel time per leg (`src/models/travel_time_prediction.py`)
-- Vehicle capacity (`winicari.bus.nbrPlace`)
+Given per route/time-bucket: predicted demand, predicted leg travel
+time, vehicle capacity. Decide departure times/headway. Objective
+(draft): minimize unmet demand + schedule-deviation cost +
+vehicle-hours. Constraints (draft): min/max headway, vehicles available
+per depot.
 
-**Decide:** departure times / headway for each route.
-
-**Objective (draft):** minimize a weighted sum of (a) predicted unmet
-demand (passengers left waiting beyond capacity), (b) deviation from the
-current schedule (operational disruption cost), (c) vehicle-hours used.
-
-**Constraints (draft):** minimum/maximum headway, vehicle count
-available per operator/depot, route travel time from predictions.
-
-**Blocked on:** no ground-truth schedule/timetable exists in the
-database to optimize against or validate deviation from (see
-`docs/database.md` — "No dedicated schedule/timetable collection
-exists"). The `horaires` array on a minority of `winicari.station`
-documents is not sufficient. This needs either (a) the business
-supplying the current published timetables outside MongoDB, or (b)
-inferring an implicit current schedule from GPS departure-time patterns
-in `Historique_pos`, which is a real but nontrivial project on its own.
+No published timetable exists, but the reference DB reconstructs 47,567
+real trips with matched per-stop timing. `derive_empirical_schedule()`
+turns that into a per (line, direction, day-of-week, time-bucket)
+trip-frequency table — an inferred schedule grounded in what the fleet
+actually runs. Only as good as the 54% of lines with resolved stop
+geometry, and it's a frequency table, not exact clock times. A real
+published timetable would validate/correct this, not replace it.
 
 ## Problem 2: Vehicle allocation
 
-**Given:** predicted demand per route, current vehicle
-`active`/`fonctionnel` status, current operator/depot (`centre`)
-assignment.
+Given: predicted demand per route, vehicle status, depot assignment.
+Decide which vehicles serve which routes. Objective (draft): maximize
+coverage for a given fleet size, or minimize fleet size for a coverage
+target. Constraints (draft): one route at a time, capacity ≥ predicted
+demand, vehicle currently operational.
 
-**Decide:** which of the ~772 vehicles serve which routes.
+`winicari.bus.fonctionnel` is a bad signal for "operational" — only
+162/772 are marked true, and it's often just stale. Better to derive
+operational status from recent trip/GPS activity (reference-DB `trips`,
+or raw `position`/`ticket` snapshots).
 
-**Objective (draft):** maximize demand coverage subject to fleet size,
-or minimize fleet size subject to a coverage target — the business
-needs to pick which framing matches their actual planning question.
+Feasible for a first pass once that operational-status signal is fixed
+— vehicle master data and route-level demand both exist.
 
-**Constraints (draft):** a vehicle can only be assigned to one route at
-a time; capacity ≥ predicted demand (or an accepted overflow rate);
-`fonctionnel: true` only (only 162/772 vehicles are currently marked
-operational — the rest of the fleet snapshot is not actually assignable
-today).
+## Problem 3: Driver scheduling — not feasible
 
-**Feasible today** for a first pass, since vehicle master data and
-route-level demand both exist — see `docs/roadmap.md` for sequencing.
-
-## Problem 3: Driver scheduling — NOT FEASIBLE with current data
-
-No driver availability, shift, or working-hours data exists anywhere in
-the database (`NamesConv` is a name/phone lookup only — see
-`docs/database.md`, section G). This cannot be built without new data
-being collected or supplied. Do not attempt to infer shifts from GPS/
-ticket activity as a substitute without explicit sign-off — that would
-be modeling a symptom (when a device happened to be active) as if it
-were the underlying constraint (when a driver is contractually
-available), which risks recommending schedules no driver can legally
-staff.
+No driver availability data exists. `NamesConv` is name/phone only. The
+reference DB's `driver_services` (35,866 rows) is closer — observed
+service windows from ticket timestamps — but that's when a device was
+selling tickets, not when a driver was actually available, and it has
+its own quality problems (negative and multi-day "shifts"). Useful
+descriptively (typical shift length/start time), not as a scheduling
+constraint. Needs real availability data collected before this is
+buildable.

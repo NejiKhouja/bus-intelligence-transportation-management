@@ -1,11 +1,4 @@
-"""Travel-time prediction models.
-
-Strategy (see docs/architecture.md): historical mean travel time per
-route-leg/hour-of-day/day-of-week as the baseline before LightGBM/XGBoost.
-
-Not implemented yet — blocked on route-leg matching for GPS segments
-(see src/features/travel_time_features.py docstring and docs/roadmap.md).
-"""
+"""Travel-time prediction. Baseline before any learned model."""
 
 from __future__ import annotations
 

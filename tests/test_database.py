@@ -1,7 +1,4 @@
-"""Smoke tests against the live MongoDB instance. Skipped automatically if
-no server is reachable, so this suite doesn't break CI environments
-without a database.
-"""
+"""Smoke tests against the live MongoDB instance. Skip if unreachable."""
 
 import pytest
 

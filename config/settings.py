@@ -10,7 +10,6 @@ load_dotenv()
 class Settings:
     mongodb_uri: str = os.getenv("MONGODB_URI", "mongodb://localhost:27017")
 
-    # The operational data is spread across four databases on the same server.
     # See docs/database.md for what lives in each.
     db_operational: str = os.getenv("MONGODB_DB_OPERATIONAL", "winicari")
     db_tickets_archive: str = os.getenv("MONGODB_DB_TICKETS_ARCHIVE", "Historique_Tickets")
@@ -20,6 +19,13 @@ class Settings:
     data_raw_dir: str = os.getenv("DATA_RAW_DIR", "./data/raw")
     data_processed_dir: str = os.getenv("DATA_PROCESSED_DIR", "./data/processed")
     data_features_dir: str = os.getenv("DATA_FEATURES_DIR", "./data/features")
+
+    # Sibling winicari repo's reference DB, read-only (docs/reference_db_integration.md).
+    # Assumes both repos are checked out side by side; override if not.
+    reference_db_path: str = os.getenv(
+        "REFERENCE_DB_PATH",
+        os.path.join(os.path.dirname(__file__), "..", "..", "winicari", "data", "reference", "winicari_reference_slim.db"),
+    )
 
     @property
     def all_databases(self) -> list[str]:
