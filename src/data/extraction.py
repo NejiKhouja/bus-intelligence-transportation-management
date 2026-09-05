@@ -45,8 +45,8 @@ def build_company_alias_map() -> dict[str, str]:
 
 def extract_routes() -> pd.DataFrame:
     """winicari.ligne -> route_id, societe, origin_fr, destination_fr,
-    n_stops, stop_ids[], stop_names_fr[], opendata_stop_codes[],
-    has_opendata_geometry."""
+    origin_ar, destination_ar, n_stops, stop_ids[], stop_names_fr[],
+    opendata_stop_codes[], has_opendata_geometry."""
     rows = []
     for doc in queries.iter_routes():
         opendata_codes = doc.get("station_opendata")
@@ -55,7 +55,9 @@ def extract_routes() -> pd.DataFrame:
             "societe": normalize_societe_name(doc.get("societe")),
             "origin_fr": doc.get("orfr"),
             "destination_fr": doc.get("desfr"),
-            "n_stops": doc.get("nbrstations"),
+            "origin_ar": doc.get("orar"),
+            "destination_ar": doc.get("desar"),
+            "n_stops": pd.to_numeric(doc.get("nbrstations"), errors="coerce"),
             "stop_ids": doc.get("stations") or [],
             "stop_names_fr": doc.get("stationnames") or [],
             "opendata_stop_codes": opendata_codes or [],
@@ -64,15 +66,18 @@ def extract_routes() -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def extract_vehicles() -> pd.DataFrame:
+def extract_vehicles(alias_map: dict[str, str] | None = None) -> pd.DataFrame:
     """winicari.bus -> vehicle_id, matricule, societe, capacity,
-    max_speed_kmh, active, fonctionnel, date_added."""
+    max_speed_kmh, active, fonctionnel, date_added. Pass
+    build_company_alias_map() as alias_map when joining against
+    reference-DB-derived tables (e.g. derive_fleet_operational_status())
+    so serial-number variants like S.R.T.K0 fold into S.R.T.K."""
     rows = []
     for doc in queries.iter_vehicles():
         rows.append({
             "vehicle_id": doc.get("code"),
             "matricule": doc.get("matricule") or None,
-            "societe": normalize_societe_name(doc.get("societe")),
+            "societe": normalize_societe_name(doc.get("societe"), alias_map),
             "capacity": pd.to_numeric(doc.get("nbrPlace"), errors="coerce"),
             "max_speed_kmh": pd.to_numeric(doc.get("vitesseMax"), errors="coerce"),
             "active": doc.get("active"),
@@ -88,6 +93,7 @@ def extract_companies() -> pd.DataFrame:
         rows.append({
             "societe": normalize_societe_name(doc.get("Nom")),
             "full_name": doc.get("nomComplet"),
+            "full_name_ar": doc.get("NomAR"),
             "governorate": doc.get("Gouvernorat"),
             "active": doc.get("active"),
         })
@@ -174,6 +180,31 @@ def extract_live_tickets() -> pd.DataFrame:
 def extract_archived_tickets(year: int) -> pd.DataFrame:
     """Main demand dataset, 2019-2026. A single year can be 200k-1.3M rows."""
     return pd.DataFrame(_flatten_ticket_doc(d, archived=True) for d in queries.iter_archived_tickets(year))
+
+
+def extract_ticket_activity_by_bus(year: int, alias_map: dict[str, str] | None = None) -> pd.DataFrame:
+    """Historique_Tickets.Ticket<year>, projected to just societe/bus/date
+    -> one row per (societe, vehicle_id) with last_ticket_date and
+    n_tickets for that year. Used to fill the fleet-operational-status
+    gap left by extract_trips() (GPS-based, only 71/772 vehicles) — see
+    transformations.derive_fleet_operational_status(). Pass
+    build_company_alias_map() as alias_map — this archive uses
+    'S.R.T.K0' as well as 'S.R.T.K', which only the fuller alias map
+    (not MANUAL_COMPANY_ALIASES alone) folds together."""
+    rows = []
+    for doc in queries.iter_ticket_activity_fields(year):
+        bus = doc.get("CodeBus")
+        rows.append({
+            "societe": normalize_societe_name(doc.get("Societe"), alias_map),
+            "vehicle_id": str(bus) if bus is not None else None,
+            "date": parse_flexible_datetime(doc.get("date")),
+        })
+    df = pd.DataFrame(rows).dropna(subset=["date", "societe", "vehicle_id"])
+    return (
+        df.groupby(["societe", "vehicle_id"])
+        .agg(last_ticket_date=("date", "max"), n_tickets=("date", "count"))
+        .reset_index()
+    )
 
 
 # --- reference DB (sibling winicari repo, docs/reference_db_integration.md) ---

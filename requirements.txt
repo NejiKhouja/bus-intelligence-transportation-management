@@ -4,9 +4,10 @@ pandas>=2.2
 numpy>=1.26
 pyarrow>=16.0
 
-# Modeling (introduced when Phase 9 baselines are implemented)
+# Modeling — HistGradientBoostingRegressor (sklearn) used instead of
+# LightGBM/XGBoost for now to avoid adding dependencies beyond what's
+# already installed; swap in if sklearn's accuracy proves insufficient.
 scikit-learn>=1.5
-lightgbm>=4.3
 
 # Optimization
 ortools>=9.10

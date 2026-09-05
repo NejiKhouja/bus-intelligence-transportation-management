@@ -59,6 +59,15 @@ def iter_archived_tickets(year: int, batch_size: int = 5000) -> Iterator[dict]:
     yield from tickets_archive_db()[f"Ticket{year}"].find(batch_size=batch_size)
 
 
+def iter_ticket_activity_fields(year: int, batch_size: int = 5000) -> Iterator[dict]:
+    """Same collection as iter_archived_tickets() but projected to just
+    Societe/CodeBus/date — for computing per-bus last-seen dates cheaply
+    without pulling full (denormalized, embedded-snapshot) documents."""
+    yield from tickets_archive_db()[f"Ticket{year}"].find(
+        {}, {"Societe": 1, "CodeBus": 1, "date": 1, "_id": 0}, batch_size=batch_size
+    )
+
+
 def available_ticket_years() -> list[int]:
     names = tickets_archive_db().list_collection_names()
     years = []

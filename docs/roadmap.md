@@ -2,32 +2,44 @@
 
 Ordered by dependency, not calendar time.
 
-## Resolved during discovery
+## Resolved
 
-- Operator-name inconsistency — confirmed: `S.R.T.GAFSA`==`SRT.ELGOUAFEL`,
+- Operator-name inconsistency — `S.R.T.GAFSA`==`SRT.ELGOUAFEL`,
   `winicari`/`Winicari` is a placeholder kept separate. Handled in
   `cleaning.normalize_societe_name()` / `extraction.build_company_alias_map()`.
 - Canonical stop table — reference DB's clustered `stops` (3,248 rows)
-  supersedes the 4 overlapping `OpenData` variants. Use
-  `extraction.extract_reference_stops()`.
-- 2023 ticket dip — confirmed device outage, not real demand drop or
-  export gap. Treat 2023 as under-observed in demand models.
+  supersedes the 4 overlapping `OpenData` variants.
+- 2023 ticket dip — confirmed device outage, not real demand drop.
+  Treat 2023 as under-observed in demand models.
 - Missing-schedule blocker — partially resolved via
-  `transformations.derive_empirical_schedule()` on reconstructed trips.
+  `derive_empirical_schedule()` on reconstructed trips.
+- `trip_stops` bad-leg patterns — `travel_times_from_trip_stops()` now
+  excludes skipped-stop spans and dark-gap legs by default (see
+  `reference_db_integration.md`). ~0.2% residual outliers remain; cap by
+  percentile before training.
+- Vehicle-operational signal — `derive_fleet_operational_status()`
+  combines GPS trips (69 vehicles) with a fallback across all 8 years of
+  `Historique_Tickets` (157 more) against the full 772-vehicle roster.
+  Confirms `fonctionnel` is unreliable: 125/162 `fonctionnel=True`
+  vehicles have no recent activity under this check. See
+  `reference_db_integration.md` for the full breakdown.
 
 ## Immediate next steps
 
-1. Extract/persist a full year of tickets + a representative GPS month
+1. Ask the business about the 536/772 vehicles (70% of the roster) with
+   **zero** activity signal across GPS trips and 8 years of ticket sales
+   — is `winicari.bus` meant to be a current fleet list, or has it just
+   never been pruned? This affects whether vehicle allocation should
+   plan against 772, ~226, or something the business defines separately.
+2. Extract/persist a full year of tickets + a representative GPS month
    into `data/processed/`, running `validation.py` for real (not
    sampled) missing/invalid rates.
-2. Add a concrete filter for `trip_stops`/`trips` before modeling — leg
-   travel-time and `driver_services` shift-length outliers
-   (`reference_db_integration.md`) need a bound, not just a caveat.
-3. Replace `fonctionnel` as the "is this vehicle operational" signal
-   with recent trip/GPS activity — the flag is often stale (see
-   `optimization_problem.md` Problem 2).
-4. Decide how to treat the 46% of lines with no resolved stop geometry
+3. Decide how to treat the 46% of lines with no resolved stop geometry
    — out of scope, or a geocoding effort to close it.
+4. If leg distance is needed for travel-time features, compute it from
+   `extract_reference_stops()` coordinates (haversine) rather than
+   `trip_stops.dist_m`, which is a match-quality distance, not a leg
+   distance (see `reference_db_integration.md`).
 
 ## Phase A — Demand forecasting (feasible now)
 
@@ -38,15 +50,16 @@ Ordered by dependency, not calendar time.
 
 ## Phase B — Travel-time prediction (feasible)
 
-- Prefer `travel_times_from_trip_stops()` (reference DB) over
+- Use `travel_times_from_trip_stops()` (reference DB) over
   `build_gps_segments()` (raw GPS) — already matched/corrected.
-- Bound outliers before modeling (see step 2 above).
+- Cap the residual duration outliers (see Resolved, above) before training.
 - Baseline: historical mean per leg/hour/day-of-week before any learned model.
 
 ## Phase C — Vehicle allocation (feasible)
 
-- Implement `vehicle_optimizer.py` against Phase A's demand and an
-  activity-derived operational fleet (not raw `fonctionnel`, see step 3).
+- Implement `vehicle_optimizer.py` against Phase A's demand and
+  `derive_fleet_operational_status()`, once step 1 above settles what
+  "the fleet" actually means for planning purposes.
 
 ## Phase D — Schedule optimization (feasible, empirical baseline)
 

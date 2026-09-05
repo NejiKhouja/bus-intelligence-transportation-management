@@ -34,13 +34,20 @@ coverage for a given fleet size, or minimize fleet size for a coverage
 target. Constraints (draft): one route at a time, capacity ≥ predicted
 demand, vehicle currently operational.
 
-`winicari.bus.fonctionnel` is a bad signal for "operational" — only
-162/772 are marked true, and it's often just stale. Better to derive
-operational status from recent trip/GPS activity (reference-DB `trips`,
-or raw `position`/`ticket` snapshots).
+`winicari.bus.fonctionnel` is a bad signal for "operational" — confirmed,
+not just suspected: of the 162 vehicles marked `fonctionnel=True`, 125
+(77%) show no recent activity under an evidence-based check.
+`transformations.derive_fleet_operational_status()` replaces it,
+combining GPS trip activity (69 vehicles) with a ticket-sales fallback
+across all 8 years of `Historique_Tickets` (157 more), both recency
+relative to the data's own latest date, not the system clock.
 
-Feasible for a first pass once that operational-status signal is fixed
-— vehicle master data and route-level demand both exist.
+Bigger finding: 536 of 772 vehicles (70%) show **zero** activity in
+either signal, ever. That's not a coverage gap in this analysis — it's
+evidence that most of `winicari.bus` isn't a current fleet list. Vehicle
+allocation should plan against the ~226 vehicles with a real activity
+signal (or whatever subset the business confirms is current), not the
+full 772-row table. See roadmap.
 
 ## Problem 3: Driver scheduling — not feasible
 

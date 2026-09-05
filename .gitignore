@@ -8,6 +8,10 @@ data/features/*
 !data/raw/.gitkeep
 !data/processed/.gitkeep
 !data/features/.gitkeep
+models/*
+!models/.gitkeep
+web/data/*
+!web/data/.gitkeep
 .venv/
 venv/
 *.egg-info/
